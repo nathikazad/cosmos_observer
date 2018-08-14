@@ -135,7 +135,7 @@ class Validator(Resource):
     	cursor.execute(query)
     	voting_power_history = cursor.fetchall()
     	db.close()
-    	history = [[voting_power_history[i][0], snapshots[i][1]] for i in range(20)]
+    	history = [{'voting_power':voting_power_history[i][0], 'time_stamp':snapshots[i][1], 'up':True} for i in range(20)]
     	return Response(json.dumps(history), status=200, mimetype='application/json')
 
 
