@@ -20,7 +20,7 @@ def update_validators(cursor):
 	snapshot_id = cursor.lastrowid
 	for validator in data['result']['validators']:
 		cursor.execute('''INSERT OR IGNORE INTO validators(pub_key)
-		        VALUES(?)''', (validator['pub_key']['value'],))
+				VALUES(?)''', (validator['pub_key']['value'],))
 		cursor.execute('''UPDATE validators SET voting_power = ?, address = ? WHERE pub_key= ?''', 
 				(int(validator['voting_power']), validator['address'],validator['pub_key']['value']))
 		
@@ -29,7 +29,7 @@ def update_validators(cursor):
 			VALUES(?,?,?)''', (cursor.fetchone()[0], snapshot_id,int(validator['voting_power'])))
 
 def start_timer():
-	threading.Timer(1, start_timer).start()
+	threading.Timer(60, start_timer).start()
 	db = sqlite3.connect('mydb')
 	cursor = db.cursor()
 	update_validators(cursor)
@@ -40,8 +40,8 @@ db = sqlite3.connect('mydb')
 cursor = db.cursor()
 try:
 	cursor.execute('''
-	    CREATE TABLE validators(id INTEGER PRIMARY KEY, name TEXT,
-	                       pub_key TEXT unique, voting_power INTEGER, address TEXT,
+		CREATE TABLE validators(id INTEGER PRIMARY KEY, name TEXT,
+						   pub_key TEXT unique, voting_power INTEGER, address TEXT,
 							 ip_address TEXT)
 		''')
 	cursor.execute('''CREATE TABLE snapshots(id INTEGER PRIMARY KEY, total_nodes INTEGER, 
@@ -52,12 +52,12 @@ try:
 	data = requests.get("http://138.197.200.70:26657/genesis").json()
 	for validator in data['result']['genesis']['validators']:
 		cursor.execute('''INSERT OR IGNORE INTO validators(name, pub_key)
-	                  VALUES(?,?)''', (validator['name'],validator['pub_key']['value']))
+					  VALUES(?,?)''', (validator['name'],validator['pub_key']['value']))
 	db.commit()
 
 	for validator in data['result']['genesis']['app_state']['stake']['validators']:
 		cursor.execute('''INSERT OR IGNORE INTO validators(name, pub_key)
-	        VALUES(?,?)''', (validator['description']['moniker'],validator['pub_key']['value']))
+			VALUES(?,?)''', (validator['description']['moniker'],validator['pub_key']['value']))
 		cursor.execute('''UPDATE validators SET name = ? WHERE pub_key= ?''', 
 			(validator['description']['moniker'],validator['pub_key']['value']))
 	db.commit()
@@ -106,42 +106,94 @@ except:
 db.close()
 
 from flask import Flask, request, jsonify, render_template, Response
-from flask_restful import Resource, Api
+from flask_restful import Resource, Api, reqparse
 
 app = Flask(__name__)
 api = Api(app)
 
 class Cosmos(Resource):
-    def get(self):
-    	db = sqlite3.connect('mydb')
-    	cursor = db.cursor()
-    	cursor.execute('''SELECT name, pub_key, voting_power, address, ip_address FROM validators WHERE voting_power > 0''')
-    	array = []
-    	for row in cursor:
-    		array.append({'name':row[0], 'pub_key':row[1], 'voting_power':row[2], 'address':row[3], 'ip':row[4]})
-    	db.close()
-        return Response(json.dumps(array), status=200, mimetype='application/json')
+	def get(self):
+		db = sqlite3.connect('mydb')
+		cursor = db.cursor()
+		cursor.execute('''SELECT name, pub_key, voting_power, address, ip_address FROM validators WHERE voting_power > 0''')
+		array = []
+		for row in cursor:
+			array.append({'name':row[0], 'pub_key':row[1], 'voting_power':row[2], 'address':row[3], 'ip':row[4]})
+		db.close()
+		return Response(json.dumps(array), status=200, mimetype='application/json')
 
 class Validator(Resource):
-    def get(self, validator_id):
-    	db = sqlite3.connect('mydb')
-    	cursor = db.cursor()
-    	cursor.execute('''SELECT MAX(id) FROM snapshots''')
-    	max_snap_shot_id = cursor.fetchone()[0]
-    	number_of_data_points = 20
-    	cursor.execute('''Select id, snap_time FROM snapshots WHERE id % ? = 0 ORDER BY id''', (max_snap_shot_id/number_of_data_points,))
-    	snapshots = cursor.fetchall()
-    	query = 'select voting_power from snapshot_entries where validator_id =' + str(validator_id) + ' and snapshot_id in (' + ','.join((str(snapshot[0]) for snapshot in snapshots)) + ')'
-    	cursor.execute(query)
-    	voting_power_history = cursor.fetchall()
-    	db.close()
-    	history = [{'voting_power':voting_power_history[i][0], 'time_stamp':snapshots[i][1], 'up':True} for i in range(20)]
-    	return Response(json.dumps(history), status=200, mimetype='application/json')
+	def get(self, validator_id):
+		db = sqlite3.connect('mydb')
+		cursor = db.cursor()
+
+		parser = reqparse.RequestParser()
+		parser.add_argument('start_time', type=str)
+		parser.add_argument('end_time', type=str)
+		parser.add_argument('number_of_points', type=int)
+		args = parser.parse_args()
+
+		# Validate the Parameters
+		cursor.execute('''SELECT MIN(snap_time), MAX(snap_time) FROM snapshots''')
+		snaptime_bounds = cursor.fetchall()
+		if not args['start_time']:
+			args['start_time'] = snaptime_bounds[0][0]
+		if not args['end_time']:
+			args['end_time'] = snaptime_bounds[0][1]
+		if not args['number_of_points']:
+			args['number_of_points'] = 20
+		cursor.execute('''SELECT COUNT(id) FROM snapshots''')
+		total_snapshots = cursor.fetchone()[0]
+		if args['number_of_points'] > total_snapshots:
+			args['number_of_points'] = total_snapshots
+
+
+
+		# Find the indices
+		print "Start time "+ args['start_time'] + " End Time " + args['end_time']
+		cursor.execute('''SELECT MIN(id), MAX(id) FROM snapshots WHERE snap_time BETWEEN ? AND ?''', (args['start_time'], args['end_time']))
+		snapshot_id_bounds = cursor.fetchall()
+		snapshot_id_min = snapshot_id_bounds[0][0]
+		snapshot_id_max = snapshot_id_bounds[0][1]
+		snapshot_id_interval = (snapshot_id_max - snapshot_id_min) / args['number_of_points']
+		if snapshot_id_interval == 0:
+			snapshot_id_interval = 1
+		print "Min ID: " + str(snapshot_id_min) + " Max ID: " + str(snapshot_id_max) + " INTERVAL: " + str(snapshot_id_interval) + " Number of points: " + str(args['number_of_points'])
+
+		
+		# Retrieve all the matching IDs
+		cursor.execute('''SELECT id, snap_time FROM snapshots WHERE id >= ? AND id % ? = 0 AND id <= ?  ORDER BY id''', ( snapshot_id_min, snapshot_id_interval, snapshot_id_max))
+		snapshots = cursor.fetchall()
+		len(snapshots)
+		
+		# Retrieve the matching snapshots
+		history = []
+		for row in snapshots:
+			cursor.execute('''SELECT voting_power FROM snapshot_entries WHERE validator_id = ? AND snapshot_id = ?''',(validator_id, row[0]))
+			voting_power_snapshot = cursor.fetchone()
+			if voting_power_snapshot:
+				history.append({'id':row[0] ,'voting_power':voting_power_snapshot[0], 'time_stamp':row[1], 'up':True})
+			else:
+				history.append({'id':row[0] ,'voting_power':0, 'time_stamp':row[1], 'up':False})
+		history = history[0:args['number_of_points']]
+
+		# Calculate Average Up Time 
+		cursor.execute('''SELECT COUNT(id) FROM snapshot_entries WHERE validator_id = ?''', (validator_id,))
+		total_snapshots_for_validator = cursor.fetchone()[0]
+		average_uptime = total_snapshots_for_validator * 100 / total_snapshots
+
+		# Find most recent voting power
+		cursor.execute('''SELECT voting_power FROM validators WHERE id = ? ''',(validator_id, ))
+		voting_power  = cursor.fetchone()[0]
+
+		db.close()
+
+		return Response(json.dumps({"voting_power": voting_power, "uptime":average_uptime, "snapshots":history}), status=200, mimetype='application/json')
 
 
 api.add_resource(Cosmos, '/cosmos')
 api.add_resource(Validator, '/validator/<int:validator_id>')
-start_timer()
+# start_timer()
 app.run(host= '0.0.0.0')
 
 
