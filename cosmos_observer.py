@@ -111,7 +111,7 @@ from flask_restful import Resource, Api, reqparse
 app = Flask(__name__)
 api = Api(app)
 
-class Cosmos(Resource):
+class Validators(Resource):
 	def get(self):
 		db = sqlite3.connect('mydb')
 		cursor = db.cursor()
@@ -123,7 +123,7 @@ class Cosmos(Resource):
 		return Response(json.dumps(array), status=200, mimetype='application/json')
 
 class Validator(Resource):
-	def get(self, validator_id):
+	def get(self, address):
 		db = sqlite3.connect('mydb')
 		cursor = db.cursor()
 
@@ -134,6 +134,11 @@ class Validator(Resource):
 		args = parser.parse_args()
 
 		# Validate the Parameters
+		cursor.execute('''SELECT id FROM validators WHERE address = ? ''',(address, ))
+		entry = cursor.fetchone()
+		if entry is None:
+			return Response(json.dumps({"Error": "Invalid Validator Address: "+address}), status=200, mimetype='application/json')
+		validator_id = entry[0]
 		cursor.execute('''SELECT MIN(snap_time), MAX(snap_time) FROM snapshots''')
 		snaptime_bounds = cursor.fetchall()
 		if not args['start_time']:
@@ -150,15 +155,18 @@ class Validator(Resource):
 
 
 		# Find the indices
-		print "Start time "+ args['start_time'] + " End Time " + args['end_time']
+		# print "Start time "+ args['start_time'] + " End Time " + args['end_time']
 		cursor.execute('''SELECT MIN(id), MAX(id) FROM snapshots WHERE snap_time BETWEEN ? AND ?''', (args['start_time'], args['end_time']))
 		snapshot_id_bounds = cursor.fetchall()
+		#print snapshot_id_bounds[0]
+		if snapshot_id_bounds[0][0] is None:
+			return Response(json.dumps({"Error": "Invalid Time Parameters"}), status=200, mimetype='application/json')
 		snapshot_id_min = snapshot_id_bounds[0][0]
 		snapshot_id_max = snapshot_id_bounds[0][1]
 		snapshot_id_interval = (snapshot_id_max - snapshot_id_min) / args['number_of_points']
 		if snapshot_id_interval == 0:
 			snapshot_id_interval = 1
-		print "Min ID: " + str(snapshot_id_min) + " Max ID: " + str(snapshot_id_max) + " INTERVAL: " + str(snapshot_id_interval) + " Number of points: " + str(args['number_of_points'])
+		#print "Min ID: " + str(snapshot_id_min) + " Max ID: " + str(snapshot_id_max) + " INTERVAL: " + str(snapshot_id_interval) + " Number of points: " + str(args['number_of_points'])
 
 		
 		# Retrieve all the matching IDs
@@ -172,9 +180,9 @@ class Validator(Resource):
 			cursor.execute('''SELECT voting_power FROM snapshot_entries WHERE validator_id = ? AND snapshot_id = ?''',(validator_id, row[0]))
 			voting_power_snapshot = cursor.fetchone()
 			if voting_power_snapshot:
-				history.append({'id':row[0] ,'voting_power':voting_power_snapshot[0], 'time_stamp':row[1], 'up':True})
+				history.append({'voting_power':voting_power_snapshot[0], 'time_stamp':row[1], 'up':True})
 			else:
-				history.append({'id':row[0] ,'voting_power':0, 'time_stamp':row[1], 'up':False})
+				history.append({'voting_power':0, 'time_stamp':row[1], 'up':False})
 		history = history[0:args['number_of_points']]
 
 		# Calculate Average Up Time 
@@ -191,9 +199,9 @@ class Validator(Resource):
 		return Response(json.dumps({"voting_power": voting_power, "uptime":average_uptime, "snapshots":history}), status=200, mimetype='application/json')
 
 
-api.add_resource(Cosmos, '/cosmos')
-api.add_resource(Validator, '/validator/<int:validator_id>')
-# start_timer()
+api.add_resource(Validators, '/validators')
+api.add_resource(Validator, '/validator/<string:address>')
+start_timer()
 app.run(host= '0.0.0.0')
 
 
