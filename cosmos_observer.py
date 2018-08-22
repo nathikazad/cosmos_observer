@@ -13,20 +13,20 @@ def get_data(address, endpoint):
 
 def update_validators(cursor):
 	data = requests.get("http://138.197.200.70:26657/validators").json()
-
-	cursor.execute('''UPDATE validators SET voting_power=0''')
-	cursor.execute('''INSERT INTO snapshots(total_nodes, snap_time, block_height) 
-		VALUES(?,datetime('now', 'localtime'),?)''', (len(data['result']['validators']), data['result']['block_height']))
-	snapshot_id = cursor.lastrowid
-	for validator in data['result']['validators']:
-		cursor.execute('''INSERT OR IGNORE INTO validators(pub_key)
-				VALUES(?)''', (validator['pub_key']['value'],))
-		cursor.execute('''UPDATE validators SET voting_power = ?, address = ? WHERE pub_key= ?''', 
-				(int(validator['voting_power']), validator['address'],validator['pub_key']['value']))
-		
-		cursor.execute('''SELECT id FROM validators WHERE pub_key = ? ''', (validator['pub_key']['value'],))
-		cursor.execute('''INSERT INTO snapshot_entries(validator_id, snapshot_id, voting_power) 
-			VALUES(?,?,?)''', (cursor.fetchone()[0], snapshot_id,int(validator['voting_power'])))
+	if 'error' not in data.keys():
+		cursor.execute('''UPDATE validators SET voting_power=0''')
+		cursor.execute('''INSERT INTO snapshots(total_nodes, snap_time, block_height) 
+			VALUES(?,datetime('now', 'localtime'),?)''', (len(data['result']['validators']), data['result']['block_height']))
+		snapshot_id = cursor.lastrowid
+		for validator in data['result']['validators']:
+			cursor.execute('''INSERT OR IGNORE INTO validators(pub_key)
+					VALUES(?)''', (validator['pub_key']['value'],))
+			cursor.execute('''UPDATE validators SET voting_power = ?, address = ? WHERE pub_key= ?''', 
+					(int(validator['voting_power']), validator['address'],validator['pub_key']['value']))
+			
+			cursor.execute('''SELECT id FROM validators WHERE pub_key = ? ''', (validator['pub_key']['value'],))
+			cursor.execute('''INSERT INTO snapshot_entries(validator_id, snapshot_id, voting_power) 
+				VALUES(?,?,?)''', (cursor.fetchone()[0], snapshot_id,int(validator['voting_power'])))
 
 def start_timer():
 	threading.Timer(60, start_timer).start()
